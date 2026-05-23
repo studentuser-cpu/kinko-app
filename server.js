@@ -1,50 +1,14 @@
 const express = require('express');
 const path = require('path');
-const cors = require('cors');
-const admin = require('firebase-admin');
-
 const app = express();
-app.use(cors());
+
 app.use(express.json());
 
-// Firebase Admin SDKの初期化
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
-const db = admin.firestore();
+// 静的ファイルの提供
+app.use(express.static(path.join(__dirname, 'public')));
 
-// 認証不要のため、データを一箇所に保存・参照するための固定ID
-const DEFAULT_UID = 'default_user';
-
-// --- 設定保存・取得 ---
-
-app.post('/api/config/save', async (req, res) => {
-  const { config } = req.body;
-  if (!config) return res.status(400).json({ error: 'configがありません' });
-  try {
-    await db.collection('vaultConfigs').doc(DEFAULT_UID).set({
-      config,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: '保存失敗: ' + e.message });
-  }
-});
-
-app.get('/api/config/load', async (req, res) => {
-  try {
-    const doc = await db.collection('vaultConfigs').doc(DEFAULT_UID).get();
-    if (!doc.exists) return res.json({ config: null });
-    res.json({ config: doc.data().config });
-  } catch (e) {
-    res.status(500).json({ error: '読み込み失敗: ' + e.message });
-  }
-});
-
-// --- 計算処理 (認証不要) ---
-
+// 計算ロジックのみを提供（バックエンド分離）
+// サーバー側にはデータ（configやhistory）を一切保存しない
 app.post('/api/calculate', (req, res) => {
   const { inputs, config } = req.body;
   const prices = [10000, 5000, 1000, 500, 100, 50, 10, 5, 1];
@@ -81,51 +45,6 @@ app.post('/api/calculate', (req, res) => {
   const diffVal = currentTotal - config.vaultTotal;
   res.json({ currentTotal, diffVal, needMoney, availableMoney, results });
 });
-
-// --- 履歴保存・取得・削除 ---
-
-app.post('/api/history/save', async (req, res) => {
-  const { snapshot } = req.body;
-  if (!snapshot) return res.status(400).json({ error: 'snapshotがありません' });
-  try {
-    await db.collection('vaultHistory').add({
-      uid: DEFAULT_UID,
-      ...snapshot,
-      savedAt: snapshot.savedAt || new Date().toISOString()
-    });
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: '保存失敗: ' + e.message });
-  }
-});
-
-app.get('/api/history/load', async (req, res) => {
-  try {
-    const snap = await db.collection('vaultHistory').where('uid', '==', DEFAULT_UID).orderBy('savedAt', 'desc').limit(50).get();
-    const history = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    res.json({ history });
-  } catch (e) {
-    res.status(500).json({ error: '読み込み失敗: ' + e.message });
-  }
-});
-
-app.post('/api/history/delete', async (req, res) => {
-  const { id } = req.body;
-  if (!id) return res.status(400).json({ error: 'idがありません' });
-  try {
-    const doc = await db.collection('vaultHistory').doc(id).get();
-    // 自身のデータであるかを確認（念のため）
-    if (!doc.exists || doc.data().uid !== DEFAULT_UID) return res.status(403).json({ error: '権限がありません' });
-    await db.collection('vaultHistory').doc(id).delete();
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: '削除失敗: ' + e.message });
-  }
-});
-
-// --- 静的ファイル ---
-
-app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
